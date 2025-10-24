@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::future::Future;
 use tokio::runtime::Runtime;
 
 /// Manually create a tokio runtime
@@ -13,15 +12,4 @@ pub fn create_runtime() -> Result<Runtime> {
         .enable_all()
         .build()?;
     Ok(runtime)
-}
-
-/// Runs an async server future on the Tokio runtime
-pub async fn run_server<F>(server_future: F)
-where
-    F: Future<Output = Result<()>>,
-{
-    let runtime = create_runtime().expect("Failed to create runtime");
-    runtime
-        .block_on(server_future)
-        .expect("Server execution failed");
 }

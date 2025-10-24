@@ -3,8 +3,7 @@ pub mod protocol;
 pub mod runtime;
 pub mod server;
 
-// Re-export public items for convenience
-pub use runtime::run_server;
+// Re-export public item for convenience
 pub use server::ChatServer;
 
 pub fn add(left: u64, right: u64) -> u64 {

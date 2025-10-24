@@ -5,34 +5,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::time::{Duration, timeout};
-use tracing::{debug, error, info}; // Import the protocol
+use tracing::{Level, debug, error, info, span};
+use tracing_futures::Instrument;
 
-/// Chat server that handles client connections and message broadcasting.
-///
-/// Maintains a TCP listener for incoming connections and a broadcast channel
-/// to send messages to all connected clients. Each client runs in a separate task.
 pub struct ChatServer {
     listener: TcpListener,
     broadcast_tx: broadcast::Sender<String>,
 }
 
 impl ChatServer {
-    /// Creates a new chat server bound to the given address.
-    ///
-    /// # Arguments
-    /// - `addr`: The address to bind to (e.g., "127.0.0.1:8080").
-    ///
-    /// # Returns
-    /// A `Result` containing the server or an error if binding fails.
-    ///
-    /// # Examples
-    /// ```rust
-    /// # #[tokio::test]
-    /// # async fn doc_test() {
-    /// let addr = "127.0.0.1:8082"; // Use a unique port to avoid conflicts
-    /// let server = ChatServer::new(addr).await.unwrap();
-    /// # }
-    /// ```
     pub async fn new(addr: &str) -> Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         let (broadcast_tx, _) = broadcast::channel(100);
@@ -43,10 +24,6 @@ impl ChatServer {
         })
     }
 
-    /// Runs the server, accepting connections and spawning client handlers.
-    ///
-    /// # Returns
-    /// A `Result` indicating success or failure.
     pub async fn run(self) -> Result<()> {
         loop {
             let (socket, addr) = self.listener.accept().await?;
@@ -54,11 +31,10 @@ impl ChatServer {
             let broadcast_rx = broadcast_tx.subscribe();
             info!("Accepted connection from {}", addr);
 
-            tokio::spawn(async move {
-                if let Err(e) = handle_client(socket, addr, broadcast_tx, broadcast_rx).await {
-                    error!("Client {} error: {:?}", addr, e);
-                }
-            });
+            tokio::spawn(
+                handle_client(socket, addr, broadcast_tx, broadcast_rx)
+                    .instrument(span!(Level::INFO, "handle_client", client_addr = %addr)),
+            );
         }
     }
 }
@@ -71,7 +47,7 @@ async fn handle_client(
 ) -> Result<()> {
     info!("Handling client {}", addr);
     let mut buffer = [0; 1024];
-    let read_timeout = Duration::from_secs(30); // 30s timeout
+    let read_timeout = Duration::from_secs(30);
 
     loop {
         tokio::select! {
@@ -84,10 +60,10 @@ async fn handle_client(
                     Ok(Ok(n)) => {
                         let raw = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
                         if !raw.is_empty() {
-                            // Attempt to deserialize JSON directly instead of re-parsing
+                            let _span = span!(Level::DEBUG, "process_message", message = %raw).entered();
                             let message = serde_json::from_str::<ChatMessage>(&raw)
-                                .or_else(|_| ChatMessage::from_raw(&raw))?; // Fallback to raw format
-                            let json = message.to_json()?; // Serialize once
+                                .or_else(|_| ChatMessage::from_raw(&raw))?;
+                            let json = message.to_json()?;
                             let formatted = format!("{}: {}", addr, json);
                             debug!("Broadcasting: {}", formatted);
                             broadcast_tx.send(formatted)?;
@@ -97,7 +73,7 @@ async fn handle_client(
                         error!("Read error for {}: {:?}", addr, e);
                         return Err(e.into());
                     }
-                    Err(_) => { // Timeout
+                    Err(_) => {
                         error!("Read timeout for {}", addr);
                         return Err(anyhow::anyhow!("Read timeout"));
                     }
