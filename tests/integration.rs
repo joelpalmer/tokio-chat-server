@@ -3,14 +3,15 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Barrier;
+use tokio::time::{Duration, pause};
 use tokio_chat_server::ChatServer;
 use tracing::info;
 
 #[tokio::test]
 async fn test_chat_server() -> Result<()> {
     tracing_subscriber::fmt::init();
+    pause();
 
-    // Create a barrier for 2 parties (server and test tasks) to sync
     let barrier = Arc::new(Barrier::new(2));
     let server_barrier = barrier.clone();
 
@@ -29,13 +30,18 @@ async fn test_chat_server() -> Result<()> {
     let mut client1 = TcpStream::connect("127.0.0.1:8081").await?;
     let mut client2 = TcpStream::connect("127.0.0.1:8081").await?;
 
-    let message = "Hello from client1\n";
+    // Send a message in "sender:content" format
+    let message = "avery:Hello from client1\n";
     client1.write_all(message.as_bytes()).await?;
+    tokio::time::advance(Duration::from_millis(50)).await; // Still works with full path
 
     let mut buffer = [0; 1024];
     let n = client2.read(&mut buffer).await?;
     let received = String::from_utf8_lossy(&buffer[..n]);
-    assert!(received.contains("Hello from client1"));
+    assert!(
+        received.contains("\"sender\":\"avery\"")
+            && received.contains("\"content\":\"Hello from client1\"")
+    );
 
     Ok(())
 }

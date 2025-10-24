@@ -3,8 +3,9 @@ use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
-// tokio_unstable
+use tokio::time::{timeout, Duration};
 use tracing::{info, debug, error};
+use crate::protocol::ChatMessage;
 
 /// Chat server that handles client connections and message broadcasting.
 ///
@@ -28,7 +29,8 @@ impl ChatServer {
     /// ```rust
     /// # #[tokio::test]
     /// # async fn doc_test() {
-    /// let server = ChatServer::new("127.0.0.1:8080").await.unwrap();
+    /// let addr = "127.0.0.1:8082"; // Use a unique port to avoid conflicts
+    /// let server = ChatServer::new(addr).await.unwrap();
     /// # }
     /// ```
     pub async fn new(addr: &str) -> Result<Self> {
@@ -49,7 +51,6 @@ impl ChatServer {
             let broadcast_rx = broadcast_tx.subscribe();
             info!("Accepted connection from {}", addr);
 
-            // Spawn a task for each client
             tokio::spawn(async move {
                 if let Err(e) = handle_client(socket, addr, broadcast_tx, broadcast_rx).await {
                     error!("Client {} error: {:?}", addr, e);
@@ -59,16 +60,6 @@ impl ChatServer {
     }
 }
 
-/// Handles a single client connection.
-///
-/// Reads messages from the client, broadcasts them, and sends broadcasted messages
-/// to the client using a `select!` loop for concurrent I/O.
-///
-/// # Arguments
-/// - `socket`: The client’s TCP socket.
-/// - `addr`: The client’s address.
-/// - `broadcast_tx`: Sender for broadcasting messages.
-/// - `broadcast_rx`: Receiver for broadcasted messages.
 async fn handle_client(
     mut socket: TcpStream,
     addr: SocketAddr,
@@ -77,31 +68,36 @@ async fn handle_client(
 ) -> Result<()> {
     info!("Handling client {}", addr);
     let mut buffer = [0; 1024];
+    let read_timeout = Duration::from_secs(30); // 30s timeout
 
     loop {
         tokio::select! {
-            // Read from client
-            result = socket.read(&mut buffer) => {
+            result = timeout(read_timeout, socket.read(&mut buffer)) => {
                 match result {
-                    Ok(0) => {
+                    Ok(Ok(0)) => {
                         info!("Client {} disconnected", addr);
                         return Ok(());
                     }
-                    Ok(n) => {
-                        let message = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
-                        if !message.is_empty() {
-                            let formatted = format!("{}: {}", addr, message);
+                    Ok(Ok(n)) => {
+                        let raw = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                        if !raw.is_empty() {
+                            let message = ChatMessage::from_raw(&raw)?;
+                            let json = message.to_json()?;
+                            let formatted = format!("{}: {}", addr, json);
                             debug!("Broadcasting: {}", formatted);
                             broadcast_tx.send(formatted)?;
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         error!("Read error for {}: {:?}", addr, e);
                         return Err(e.into());
                     }
+                    Err(_) => { // Timeout
+                        error!("Read timeout for {}", addr);
+                        return Err(anyhow::anyhow!("Read timeout"));
+                    }
                 }
             }
-            // Write broadcasted messages to client
             result = broadcast_rx.recv() => {
                 match result {
                     Ok(message) => {
