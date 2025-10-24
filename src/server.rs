@@ -1,11 +1,11 @@
+use crate::protocol::ChatMessage;
 use anyhow::Result;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
-use tokio::time::{timeout, Duration};
-use tracing::{info, debug, error};
-use crate::protocol::ChatMessage;
+use tokio::time::{Duration, timeout};
+use tracing::{debug, error, info}; // Import the protocol
 
 /// Chat server that handles client connections and message broadcasting.
 ///
@@ -37,7 +37,10 @@ impl ChatServer {
         let listener = TcpListener::bind(addr).await?;
         let (broadcast_tx, _) = broadcast::channel(100);
         info!("Chat server bound to {}", addr);
-        Ok(ChatServer { listener, broadcast_tx })
+        Ok(ChatServer {
+            listener,
+            broadcast_tx,
+        })
     }
 
     /// Runs the server, accepting connections and spawning client handlers.
@@ -81,8 +84,10 @@ async fn handle_client(
                     Ok(Ok(n)) => {
                         let raw = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
                         if !raw.is_empty() {
-                            let message = ChatMessage::from_raw(&raw)?;
-                            let json = message.to_json()?;
+                            // Attempt to deserialize JSON directly instead of re-parsing
+                            let message = serde_json::from_str::<ChatMessage>(&raw)
+                                .or_else(|_| ChatMessage::from_raw(&raw))?; // Fallback to raw format
+                            let json = message.to_json()?; // Serialize once
                             let formatted = format!("{}: {}", addr, json);
                             debug!("Broadcasting: {}", formatted);
                             broadcast_tx.send(formatted)?;

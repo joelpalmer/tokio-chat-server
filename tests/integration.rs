@@ -1,10 +1,10 @@
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::Barrier;
 use tokio::time::{Duration, pause};
 use tokio_chat_server::ChatServer;
+use tokio_chat_server::client::Client;
+use tokio_chat_server::protocol::ChatMessage;
 use tracing::info;
 
 #[tokio::test]
@@ -27,19 +27,21 @@ async fn test_chat_server() -> Result<()> {
     barrier.wait().await;
     info!("Test proceeding after barrier");
 
-    let mut client1 = TcpStream::connect("127.0.0.1:8081").await?;
-    let mut client2 = TcpStream::connect("127.0.0.1:8081").await?;
+    let mut client1 = Client::connect("127.0.0.1:8081").await?;
+    let mut client2 = Client::connect("127.0.0.1:8081").await?;
 
-    // Send a message in "sender:content" format
-    let message = "avery:Hello from client1\n";
-    client1.write_all(message.as_bytes()).await?;
-    tokio::time::advance(Duration::from_millis(50)).await; // Still works with full path
+    let message = ChatMessage {
+        sender: "avery".to_string(),
+        content: "Hello from client1".to_string(),
+    };
+    client1.send(message).await?;
+    tokio::time::advance(Duration::from_millis(20)).await; // Time for send
+    tokio::time::advance(Duration::from_millis(30)).await; // Time for process/broadcast
 
-    let mut buffer = [0; 1024];
-    let n = client2.read(&mut buffer).await?;
-    let received = String::from_utf8_lossy(&buffer[..n]);
+    let received = client2.receive().await?;
     assert!(
-        received.contains("\"sender\":\"avery\"")
+        received.starts_with("127.0.0.1:")
+            && received.contains("\"sender\":\"avery\"")
             && received.contains("\"content\":\"Hello from client1\"")
     );
 
